@@ -46,6 +46,15 @@ DebouncedInput btnLogPurge(PIN_BTN_LOG_PURGE);
 DebouncedInput swSilent(PIN_SW_SILENT);
 Buzzer buzzer(PIN_BUZZER);
 
+// Log Purge requires a deliberate hold before it actually clears anything,
+// so a brief accidental bump can't wipe the log. The warning chime plays
+// the moment the hold begins (a chance to let go if it wasn't
+// intentional); the confirm chime plays only once the hold completes and
+// the purge actually fires.
+constexpr uint32_t PURGE_HOLD_MS = 3000;
+const ChimeNote PURGE_WARNING[] = {{2200, 150}, {700, 150}, {2200, 150}};
+const ChimeNote PURGE_CONFIRM[] = {{1200, 90}, {1600, 90}, {2200, 140}};
+
 // ---------------------------------------------------------------------------
 // Diagnostic ticker - reserved top strip on the big OLED. Scrolls the
 // opposite direction from the marquee below it so the two never sit at
@@ -148,6 +157,7 @@ void loop() {
   btnLogPurge.update();
   swSilent.update();
   buzzer.setMuted(swSilent.isActive());
+  buzzer.update();
 
   if (btnConfirm.pressed()) {
     buzzer.confirmChime();
@@ -156,11 +166,29 @@ void loop() {
     // alignment detection exists.
   }
 
+  static uint32_t purgeHoldStart = 0;
+  static bool purgeHolding = false;
+  static bool purgeFired = false;
+
   if (btnLogPurge.pressed()) {
-    buzzer.purgeChime();
-    badgesSeenCount = 0; // placeholder until persistent flash log exists
-    Serial.println(F("Log purge button pressed - badgesSeenCount reset"));
-    // TODO: purge the persistent flash log once Passive Mode logging exists.
+    purgeHoldStart = millis();
+    purgeHolding = true;
+    purgeFired = false;
+    buzzer.playSequence(PURGE_WARNING, 3);
+  }
+
+  if (purgeHolding) {
+    if (!btnLogPurge.isActive()) {
+      // Released before the hold completed -- cancel, no purge.
+      purgeHolding = false;
+      if (!purgeFired) Serial.println(F("Log purge cancelled - released early"));
+    } else if (!purgeFired && (millis() - purgeHoldStart >= PURGE_HOLD_MS)) {
+      badgesSeenCount = 0; // placeholder until persistent flash log exists
+      buzzer.playSequence(PURGE_CONFIRM, 3);
+      Serial.println(F("Log purge confirmed (held 3s) - badgesSeenCount reset"));
+      // TODO: purge the persistent flash log once Passive Mode logging exists.
+      purgeFired = true;
+    }
   }
 
   if (Serial.available()) {
