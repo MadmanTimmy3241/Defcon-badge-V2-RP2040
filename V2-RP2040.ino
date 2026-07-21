@@ -37,6 +37,16 @@ ScrollingText marqueeMatrix(matrixWing, WITTY_MESSAGES, WITTY_MESSAGE_COUNT,
                              /*pixelsPerSecond=*/30);
 
 // ---------------------------------------------------------------------------
+// Buttons, Silent Mode switch, buzzer
+// ---------------------------------------------------------------------------
+// Declared before the diagnostic ticker below so nextDiagCard() can read
+// swSilent's state for the SOUND card.
+DebouncedInput btnConfirm(PIN_BTN_CONFIRM);
+DebouncedInput btnLogPurge(PIN_BTN_LOG_PURGE);
+DebouncedInput swSilent(PIN_SW_SILENT);
+Buzzer buzzer(PIN_BUZZER);
+
+// ---------------------------------------------------------------------------
 // Diagnostic ticker - reserved top strip on the big OLED. Scrolls the
 // opposite direction from the marquee below it so the two never sit at
 // matching pixel columns, to avoid OLED burn-in.
@@ -57,24 +67,19 @@ const char *nextDiagCard() {
       break;
     }
     case 1:
-    default:
       snprintf(buf, sizeof(buf), "BADGES SEEN: %lu", badgesSeenCount);
       break;
+    case 2:
+    default:
+      snprintf(buf, sizeof(buf), "SOUND: %s", swSilent.isActive() ? "OFF" : "ON");
+      break;
   }
-  card = (card + 1) % 2;
+  card = (card + 1) % 3;
   return buf;
 }
 
 ScrollingText diagBand(oled, nextDiagCard, SSD1306_WHITE, /*textSize=*/1,
                         /*pixelsPerSecond=*/40);
-
-// ---------------------------------------------------------------------------
-// Buttons, Silent Mode switch, buzzer
-// ---------------------------------------------------------------------------
-DebouncedInput btnConfirm(PIN_BTN_CONFIRM);
-DebouncedInput btnLogPurge(PIN_BTN_LOG_PURGE);
-DebouncedInput swSilent(PIN_SW_SILENT);
-Buzzer buzzer(PIN_BUZZER);
 
 // Adafruit_SSD1306::begin() doesn't reliably fail when no display is
 // attached (the SSD1306 has no readable status register for BusIO to

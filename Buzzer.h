@@ -1,9 +1,14 @@
 #pragma once
 #include <Arduino.h>
 
-// Thin wrapper around tone()/noTone() for the piezo buzzer (driven through
-// an NPN switch transistor -- tone()'s normal GPIO toggling is exactly
-// what a low-side switch transistor needs, no inversion required).
+// Thin wrapper around tone()/noTone() for the piezo buzzer (Same Sky
+// CPT-1207-5LTH-T), wired directly from the GPIO to GND -- no driver
+// transistor. It only draws ~2mA at its rated 5Vp-p, so the GPIO's 3.3V
+// swing drives it fine on its own, and driving below its rated voltage is
+// also what keeps the volume at a moderate level instead of its full
+// rated 85dB. Chime frequencies below are chosen off the datasheet's
+// resonant peak (~3-5kHz, the loudest/harshest part of its response
+// curve) to stay gentle rather than sharp.
 class Buzzer {
 public:
   explicit Buzzer(uint8_t pin) : _pin(pin) {}
