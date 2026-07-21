@@ -15,6 +15,8 @@
 #include "ScrollingText.h"
 #include "Button.h"
 #include "Buzzer.h"
+#include "IR.h"
+#include "Pentacle.h"
 
 // ---------------------------------------------------------------------------
 // Display drivers
@@ -54,6 +56,48 @@ Buzzer buzzer(PIN_BUZZER);
 constexpr uint32_t PURGE_HOLD_MS = 3000;
 const ChimeNote PURGE_WARNING[] = {{2200, 150}, {700, 150}, {2200, 150}};
 const ChimeNote PURGE_CONFIRM[] = {{1200, 90}, {1600, 90}, {2200, 140}};
+
+// ---------------------------------------------------------------------------
+// IR - omni ring (Passive Mode broadcast/receive) + directional handshake
+// pair. Directional TX is intentionally never called yet -- it's only
+// meant to transmit while actively probing for a face-to-face partner,
+// which is Handshake Mode logic that doesn't exist yet. Its receiver is
+// still wired up so we can confirm that pin decodes correctly too.
+// ---------------------------------------------------------------------------
+IrTransmitter irOmniTx(PIN_IR_OMNI_TX);
+IrReceiver irOmniRx(PIN_IR_OMNI_RX);
+IrTransmitter irDirTx(PIN_IR_DIR_TX);
+IrReceiver irDirRx(PIN_IR_DIR_RX);
+
+uint32_t myBadgeId = 0;
+constexpr uint32_t OMNI_BROADCAST_INTERVAL_MS = 700;
+
+// ---------------------------------------------------------------------------
+// Easter egg - seeing EASTER_EGG_BADGE_ID over IR takes over the whole
+// OLED with a spinning pentagram and an ominous stinger chime, but only
+// the first time. After that, no repeat animation/sound -- just a small
+// static star left permanently in a reserved corner of the diagnostic
+// band, so it doesn't get spammed on every re-sighting of the same badge.
+// ---------------------------------------------------------------------------
+PentacleAnimation pentacle;
+const ChimeNote EASTER_EGG_STINGER[] = {{600, 150}, {500, 150}, {350, 300}};
+bool easterEggTriggered = false;
+
+constexpr int16_t EASTER_EGG_STAR_MARGIN = 16; // reserved column width, right edge of the diag band
+constexpr int16_t EASTER_EGG_STAR_RADIUS = 5;
+
+void playEasterEggEffect() {
+  pentacle.start();
+  buzzer.playSequence(EASTER_EGG_STINGER, 3);
+}
+
+// Seeing EASTER_EGG_BADGE_ID over IR -- one-time, grants the permanent
+// star.
+void triggerEasterEgg() {
+  if (easterEggTriggered) return; // already seen -- no repeat
+  easterEggTriggered = true;
+  playEasterEggEffect();
+}
 
 // ---------------------------------------------------------------------------
 // Diagnostic ticker - reserved top strip on the big OLED. Scrolls the
@@ -109,11 +153,17 @@ void setup() {
   Wire1.setClock(I2C1_CLOCK_HZ);
 
   randomSeed(rp2040.hwrand32());
+  myBadgeId = (FORCE_BADGE_ID != 0) ? FORCE_BADGE_ID : rp2040.hwrand32();
 
   oledPresent = i2cDetect(I2C_ADDR_OLED) &&
                 oled.begin(SSD1306_SWITCHCAPVCC, I2C_ADDR_OLED);
   if (oledPresent) {
     oled.cp437(true);
+    // Adafruit_SSD1306::begin() draws its own splash logo into the buffer
+    // by default; clear it so no stray lit pixels linger in regions nothing
+    // else ever redraws (e.g. the easter egg's reserved star column).
+    oled.clearDisplay();
+    oled.display();
     marqueeOled.setRegion(0, OLED_DIAG_HEIGHT, OLED_WIDTH, OLED_MARQUEE_HEIGHT);
     marqueeOled.begin();
     // No per-instance setFlush() here: with two regions sharing this one
@@ -122,10 +172,15 @@ void setup() {
     // combines both regions' updates into a single push instead.
 
     if (OLED_DIAG_HEIGHT > 0) {
-      diagBand.setRegion(0, 0, OLED_WIDTH, OLED_DIAG_HEIGHT);
+      // Right edge is reserved for the easter egg's star icon (see
+      // triggerEasterEgg()) so its own fillRect-based clear never wipes it.
+      diagBand.setRegion(0, 0, OLED_WIDTH - EASTER_EGG_STAR_MARGIN, OLED_DIAG_HEIGHT);
       diagBand.setDirection(ScrollDirection::LeftToRight);
       diagBand.begin();
     }
+
+    int16_t pentacleRadius = (min(OLED_WIDTH, OLED_HEIGHT) / 2) - 8;
+    pentacle.begin(oled, OLED_WIDTH / 2, OLED_HEIGHT / 2, pentacleRadius, SSD1306_WHITE);
   }
   Serial.printf("%dx%d OLED @0x%02X: %s\n", OLED_WIDTH, OLED_HEIGHT,
                 I2C_ADDR_OLED, oledPresent ? "found" : "not found");
@@ -143,12 +198,41 @@ void setup() {
   btnLogPurge.begin();
   swSilent.begin();
   buzzer.begin();
+
+  irOmniTx.begin();
+  irOmniRx.begin();
+  irDirTx.begin();
+  irDirRx.begin();
+  Serial.printf("badge ID: 0x%08lX\n", myBadgeId);
 }
 
 void loop() {
   if (oledPresent) {
-    bool changed = marqueeOled.update();
-    if (OLED_DIAG_HEIGHT > 0) changed |= diagBand.update();
+    bool changed = pentacle.update();
+    if (!pentacle.active()) {
+      // Either the pentacle was never running, or this is the exact
+      // iteration it just finished on -- either way, normal content owns
+      // the screen again immediately, no dead frame in between.
+      changed |= marqueeOled.update();
+      if (OLED_DIAG_HEIGHT > 0) {
+        bool diagChanged = diagBand.update();
+        changed |= diagChanged;
+        if (diagChanged) {
+          // diagBand's own clear only covers its logical region width,
+          // but text drawing isn't clipped to that boundary -- as a
+          // message scrolls in/out, characters can visually spill past
+          // it into this reserved column. Reclaim the column every time
+          // diagBand actually redraws (not just once), so spillover never
+          // accumulates, then redraw the star on top if it's been earned.
+          oled.fillRect(OLED_WIDTH - EASTER_EGG_STAR_MARGIN, 0,
+                        EASTER_EGG_STAR_MARGIN, OLED_DIAG_HEIGHT, 0);
+          if (easterEggTriggered) {
+            drawPentagram(oled, OLED_WIDTH - EASTER_EGG_STAR_MARGIN / 2, OLED_DIAG_HEIGHT / 2,
+                          EASTER_EGG_STAR_RADIUS, 0.0f, SSD1306_WHITE);
+          }
+        }
+      }
+    }
     if (changed) oled.display();
   }
   if (matrixPresent) marqueeMatrix.update();
@@ -165,6 +249,18 @@ void loop() {
     // TODO: feed into Handshake Mode's mutual-confirm logic once IR
     // alignment detection exists.
   }
+
+  // Secret manual trigger: Silent Mode engaged + both buttons held
+  // together plays the same animation/sound as spotting the reserved
+  // badge ID, but deliberately does NOT grant the permanent star -- that
+  // stays reserved for an actual IR sighting.
+  static bool secretComboActive = false;
+  bool secretComboNow = swSilent.isActive() && btnConfirm.isActive() && btnLogPurge.isActive();
+  if (secretComboNow && !secretComboActive) {
+    playEasterEggEffect();
+    Serial.println(F("Secret combo triggered (Silent + both buttons)"));
+  }
+  secretComboActive = secretComboNow;
 
   static uint32_t purgeHoldStart = 0;
   static bool purgeHolding = false;
@@ -191,6 +287,28 @@ void loop() {
     }
   }
 
+  static uint32_t lastOmniBroadcast = 0;
+  if (!irOmniTx.busy() && (millis() - lastOmniBroadcast >= OMNI_BROADCAST_INTERVAL_MS)) {
+    irOmniTx.send(myBadgeId);
+    lastOmniBroadcast = millis();
+  }
+
+  irOmniRx.update();
+  irDirRx.update();
+
+  if (irOmniRx.available()) {
+    uint32_t id = irOmniRx.lastPayload();
+    badgesSeenCount++; // placeholder count -- no dedup/flash logging yet
+    Serial.printf("omni RX: badge 0x%08lX (seen count now %lu)\n", id, badgesSeenCount);
+    if (id == EASTER_EGG_BADGE_ID) triggerEasterEgg();
+  }
+  if (irDirRx.available()) {
+    uint32_t id = irDirRx.lastPayload();
+    Serial.printf("directional RX: badge 0x%08lX\n", id);
+    if (id == EASTER_EGG_BADGE_ID) triggerEasterEgg();
+    // TODO: feed into Handshake Mode's alignment/probe logic once it exists.
+  }
+
   if (Serial.available()) {
     while (Serial.available()) Serial.read(); // drain whatever was sent
     runDiagnostics();
@@ -215,6 +333,10 @@ void runDiagnostics() {
   Serial.printf("  silent mode switch: %s\n", swSilent.isActive() ? "ON" : "off");
   Serial.printf("  confirm button: %s\n", btnConfirm.isActive() ? "held" : "released");
   Serial.printf("  log purge button: %s\n", btnLogPurge.isActive() ? "held" : "released");
+
+  Serial.println(F("IR:"));
+  Serial.printf("  badge ID: 0x%08lX\n", myBadgeId);
+  Serial.printf("  badges seen (unlogged count): %lu\n", badgesSeenCount);
 
   Serial.println(F("live I2C1 bus scan:"));
   uint8_t found = 0;

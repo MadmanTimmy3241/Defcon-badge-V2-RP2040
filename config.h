@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 // Pin mapping
 // ---------------------------------------------------------------------------
-constexpr uint8_t PIN_IR_OMNI_TX    = 2;  // Omni IR TX -> 4x edge LEDs (NPN)
-constexpr uint8_t PIN_IR_OMNI_RX    = 3;  // Omni IR RX <- 4x TSOP38238, diode-OR'd, active LOW
+constexpr uint8_t PIN_IR_OMNI_TX    = 2;  // Omni IR TX -> 2x edge LEDs, ~45 deg off-center each side (NPN)
+constexpr uint8_t PIN_IR_OMNI_RX    = 3;  // Omni IR RX <- 2x TSOP38238, diode-OR'd, active LOW
 constexpr uint8_t PIN_IR_DIR_TX     = 4;  // Directional/handshake IR TX -> front LED (NPN)
 constexpr uint8_t PIN_IR_DIR_RX     = 5;  // Directional/handshake IR RX <- front TSOP38238
 constexpr uint8_t PIN_I2C1_SDA      = 6;  // I2C1 SDA (local bus)
@@ -60,3 +60,16 @@ constexpr uint8_t OLED_MARQUEE_HEIGHT = OLED_HEIGHT - OLED_DIAG_HEIGHT;
 constexpr uint8_t OLED_TEXT_SIZE = OLED_MARQUEE_HEIGHT / 8;
 
 constexpr uint32_t I2C1_CLOCK_HZ = 400000; // Fast mode; wiring is soldered and verified good
+
+// ---------------------------------------------------------------------------
+// Badge identity
+// ---------------------------------------------------------------------------
+// Reserved easter-egg ID: any badge running this firmware that receives
+// this exact ID over IR shows the pentacle animation, regardless of
+// whose badge is flashed with it.
+constexpr uint32_t EASTER_EGG_BADGE_ID = 0xBADC0DE5;
+
+// Set to EASTER_EGG_BADGE_ID to make *this* badge broadcast the reserved
+// ID above; set to 0 to generate a random badge ID at boot instead (the
+// normal case for everyone else's badge).
+constexpr uint32_t FORCE_BADGE_ID = EASTER_EGG_BADGE_ID;
